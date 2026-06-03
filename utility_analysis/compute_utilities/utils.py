@@ -538,6 +538,42 @@ async def generate_responses(agent, prompts, system_message=None, K=10, timeout=
     return responses_by_prompt
 
 
+async def generate_choice_probs(
+    agent,
+    prompts,
+    system_message=None,
+    choices=['A', 'B'],
+    verbose=True,
+):
+    """Logprobs-mode parallel of generate_responses. Dispatches to the agent's
+    native forced-choice-probability path (one call per prompt, no K) and
+    returns a dict ``{prompt_idx: P(choices[0])}`` where the value is a float
+    in [0, 1] or ``None`` if unparseable.
+
+    Supports ``vLLMAgent`` (native in-process batched ``llm.generate`` with
+    high top-k) and ``LiteLLMAgent`` (HTTP/OpenAI-compatible, top-k capped at
+    20). Other agent types raise NotImplementedError.
+    """
+    messages = []
+    for prompt in prompts:
+        msg = []
+        if system_message is not None and agent.accepts_system_message:
+            msg.append({'role': 'system', 'content': system_message})
+        msg.append({'role': 'user', 'content': prompt})
+        messages.append(msg)
+
+    if isinstance(agent, LiteLLMAgent):
+        probs = await agent.async_choice_probs(messages, choices=choices, verbose=verbose)
+    elif isinstance(agent, vLLMAgent):
+        probs = agent.choice_probs(messages, choices=choices)
+    else:
+        raise NotImplementedError(
+            f"use_logprobs mode is not implemented for agent type "
+            f"{type(agent).__name__}; use vLLMAgent or LiteLLMAgent."
+        )
+    return {i: probs[i] for i in range(len(prompts))}
+
+
 async def evaluate_holdout_set(
     graph,
     agent,
@@ -574,22 +610,33 @@ async def evaluate_holdout_set(
         comparison_prompt_template
     )
     
-    # Generate responses for holdout edges
-    holdout_responses = await generate_responses(
-        agent=agent,
-        prompts=holdout_prompts,
-        system_message=system_message,
-        K=K
-    )
-    
-    # Parse responses and process them into preference data
-    parsed_responses = parse_responses_forced_choice(holdout_responses, with_reasoning=with_reasoning)
-    processed_preference_data = utility_model.process_responses(
-        graph=graph,
-        responses=holdout_responses,
-        parsed_responses=parsed_responses,
-        prompt_idx_to_key=holdout_prompt_idx_to_key
-    )
+    # Generate responses for holdout edges. Honor logprobs mode if the utility
+    # model was configured with use_logprobs=True.
+    if getattr(utility_model, 'use_logprobs', False):
+        choice_probs = await generate_choice_probs(
+            agent=agent,
+            prompts=holdout_prompts,
+            system_message=system_message,
+        )
+        processed_preference_data = utility_model.process_choice_probs(
+            graph=graph,
+            choice_probs=choice_probs,
+            prompt_idx_to_key=holdout_prompt_idx_to_key,
+        )
+    else:
+        holdout_responses = await generate_responses(
+            agent=agent,
+            prompts=holdout_prompts,
+            system_message=system_message,
+            K=K
+        )
+        parsed_responses = parse_responses_forced_choice(holdout_responses, with_reasoning=with_reasoning)
+        processed_preference_data = utility_model.process_responses(
+            graph=graph,
+            responses=holdout_responses,
+            parsed_responses=parsed_responses,
+            prompt_idx_to_key=holdout_prompt_idx_to_key
+        )
     
     # Add edges to graph
     graph.add_edges(processed_preference_data)

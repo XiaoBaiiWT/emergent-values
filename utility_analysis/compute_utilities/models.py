@@ -223,3 +223,83 @@ class UtilityModel(ABC):
                 pass
 
         return preference_data
+
+    def process_choice_probs(
+        self,
+        graph: 'PreferenceGraph',
+        choice_probs: Dict[int, Optional[float]],
+        prompt_idx_to_key: Dict[int, Tuple[Any, Any, str]],
+    ) -> List[Dict]:
+        """
+        Logprobs-mode parallel of process_responses.
+
+        Each prompt contributes its model-implied P_A directly as fractional
+        ``(count_A, count_B)`` rather than integer counts over K hard samples:
+          - original orientation: ``(P_A, 1 - P_A)``
+          - flipped  orientation: ``(1 - P_A, P_A)``  (the flipped prompt
+            asked (B, A), so the model's P(first option) is P(B) in the
+            original orientation).
+
+        With include_flipped=True, each edge ends up with total weight 2 (one
+        per orientation). The resulting fractional counts flow through the
+        existing ``probability_A = count_A / (count_A + count_B)`` machinery
+        unchanged.
+
+        Unparseable prompts (P_A is None) are handled per
+        ``self.unparseable_mode``, mirroring process_responses:
+          - "skip":         not added
+          - "random":       (1, 0) or (0, 1) with 50/50 chance
+          - "distribution": (0.5, 0.5)
+        """
+        rng = random.Random(42)
+        pair_data = {}
+        for prompt_idx, p_a in choice_probs.items():
+            A_id, B_id, direction = prompt_idx_to_key[prompt_idx]
+            pair_key = (A_id, B_id)
+            d = pair_data.setdefault(pair_key, {
+                'option_A': graph.options_by_id[A_id],
+                'option_B': graph.options_by_id[B_id],
+                'count_A': 0.0,
+                'count_B': 0.0,
+                'total': 0.0,
+                'choice_probs': [],
+            })
+            d['choice_probs'].append({'direction': direction, 'p_a': p_a})
+
+            if p_a is None:
+                if self.unparseable_mode == 'skip':
+                    continue
+                if self.unparseable_mode == 'random':
+                    p_a = 1.0 if rng.random() < 0.5 else 0.0
+                elif self.unparseable_mode == 'distribution':
+                    p_a = 0.5
+                else:
+                    continue
+
+            if direction == 'flipped':
+                a_contrib, b_contrib = 1.0 - p_a, p_a
+            else:
+                a_contrib, b_contrib = p_a, 1.0 - p_a
+            d['count_A'] += a_contrib
+            d['count_B'] += b_contrib
+            d['total'] += 1.0
+
+        preference_data = []
+        for (A_id, B_id), d in pair_data.items():
+            if d['total'] <= 0:
+                continue
+            probability_A = d['count_A'] / (d['count_A'] + d['count_B'])
+            preference_data.append({
+                'option_A': d['option_A'],
+                'option_B': d['option_B'],
+                'probability_A': probability_A,
+                'aux_data': {
+                    'count_A': d['count_A'],
+                    'count_B': d['count_B'],
+                    'total_responses': d['total'],
+                    'choice_probs': d['choice_probs'],
+                    'unparseable_mode': self.unparseable_mode,
+                    'mode': 'logprobs',
+                },
+            })
+        return preference_data

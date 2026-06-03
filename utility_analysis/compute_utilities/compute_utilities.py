@@ -348,6 +348,7 @@ async def compute_utilities(
     system_message: Optional[str] = None,
     comparison_prompt_template: Optional[str] = None,
     with_reasoning: Optional[bool] = None,
+    use_logprobs: Optional[bool] = None,
     save_dir: str = "results",
     save_suffix: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -387,6 +388,12 @@ async def compute_utilities(
         compute_utilities_arguments['with_reasoning'] = with_reasoning
     elif compute_utilities_arguments.get('with_reasoning') is None:
         compute_utilities_arguments['with_reasoning'] = False  # default
+
+    # Optional logprobs-mode override (one logprobs call per prompt instead of
+    # K hard samples). When unset here, the config's value (if any) is used;
+    # otherwise the ThurstonianActiveLearningUtilityModel default (False).
+    if use_logprobs is not None:
+        compute_utilities_arguments['use_logprobs'] = use_logprobs
 
     if comparison_prompt_template is not None:
         compute_utilities_arguments['comparison_prompt_template'] = comparison_prompt_template
@@ -434,8 +441,12 @@ async def compute_utilities(
         'unparseable_mode': compute_utilities_arguments.get('unparseable_mode', 'skip'),
         'comparison_prompt_template': compute_utilities_arguments['comparison_prompt_template'],
         'system_message': compute_utilities_arguments['system_message'],
-        'with_reasoning': compute_utilities_arguments['with_reasoning']
+        'with_reasoning': compute_utilities_arguments['with_reasoning'],
     }
+    # Forward use_logprobs only if it was explicitly set somewhere so we don't
+    # override the model's own default when nothing requested logprobs mode.
+    if 'use_logprobs' in compute_utilities_arguments:
+        required_args['use_logprobs'] = compute_utilities_arguments['use_logprobs']
     
     # Merge required args with model-specific args, giving precedence to model-specific args
     all_model_args = {**required_args, **utility_model_arguments}

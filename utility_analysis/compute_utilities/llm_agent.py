@@ -6,7 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from base64 import b64encode
 from functools import wraps
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Optional
 import asyncio
 from openai import AsyncOpenAI
 from tqdm.asyncio import tqdm_asyncio
@@ -461,12 +461,17 @@ class GeminiAgent(LLMAgent):
 
 class vLLMAgent(LLMAgent):
 
-    def __init__(self, model="meta-llama/Llama-2-7b-chat-hf", max_tokens=2048, temperature=0.0, cache_dir='/data/public_models', trust_remote_code=False, accepts_system_message=True, tokenizer_path=None):
+    def __init__(self, model="meta-llama/Llama-2-7b-chat-hf", max_tokens=2048, temperature=0.0, cache_dir='/data/public_models', trust_remote_code=False, accepts_system_message=True, tokenizer_path=None, max_logprobs: int = 20):
         super().__init__(temperature=temperature, max_tokens=max_tokens, accepts_system_message=accepts_system_message)
         self.model = model
         self.cache_dir = cache_dir
         self.trust_remote_code = trust_remote_code
-        
+        # Hard cap on top-k logprobs the engine will return; controls the cap
+        # used by ``choice_probs``. Default 20 matches the OpenAI cap; for
+        # A/B forced choice the top-2 is plenty, but bump higher if you'd
+        # rather widen the safety margin.
+        self.max_logprobs = max_logprobs
+
         # Load tokenizer and model
         self.tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_path if tokenizer_path is not None else model,
@@ -479,7 +484,7 @@ class vLLMAgent(LLMAgent):
             additional_kwargs["max_model_len"] = 8192
             additional_kwargs["dtype"] = "float16"
             additional_kwargs["enforce_eager"] = True
-        
+
         # Initialize vllm
         self.llm = LLM(
             model=model,
@@ -487,6 +492,7 @@ class vLLMAgent(LLMAgent):
             trust_remote_code=trust_remote_code,
             download_dir=cache_dir,
             tensor_parallel_size=torch.cuda.device_count(),  # Use all available GPUs
+            max_logprobs=max_logprobs,
             **additional_kwargs
         )
 
@@ -536,6 +542,71 @@ class vLLMAgent(LLMAgent):
 
     def _completions_batch(self, messages_list: List[List[Dict]], batch_size: int = 1) -> List[str]:
         return self._completions(messages_list, batch_size)
+
+    def choice_probs(
+        self,
+        messages_list: List[List[Dict]],
+        choices: List[str] = ['A', 'B'],
+        logprobs: Optional[int] = None,
+    ) -> List[Optional[float]]:
+        """
+        Forced-choice via a single logprobs call per message, batched natively
+        through ``self.llm.generate`` (one continuous-batched forward pass for
+        all prompts). Returns P(choices[0]) per message:
+
+            P_A = sum(exp(lp)) over A-variant tokens
+                / (sum(exp(lp)) over A-variants + sum(exp(lp)) over B-variants)
+
+        where variants are matched by stripped, case-insensitive token text
+        (so " A", "A", '"A"' etc. all count as A). ``logprobs`` is the number
+        of top tokens vLLM returns per position; defaults to
+        ``self.max_logprobs`` (set at agent construction; 20 by default). For
+        A/B forced choice the answer tokens are virtually always in the top
+        few, so this is plenty; bump ``vLLMAgent(..., max_logprobs=...)`` at
+        construction if you want a larger safety margin.
+
+        Returns:
+            list aligned with ``messages_list``. An entry is ``None`` when
+            neither choice appears in the returned top-logprobs.
+
+        Notes:
+            * Uses temperature=1.0 so the returned distribution matches the
+              temp-1.0 hard-sampling distribution.
+            * vLLM raises ``VLLMValidationError`` if ``logprobs`` exceeds the
+              engine's ``max_logprobs`` cap (set at engine construction).
+        """
+        import math
+        if logprobs is None:
+            logprobs = self.max_logprobs
+        assert len(choices) == 2, "choices must be a list of two options"
+        a_norm = choices[0].strip().strip('"\'').lower()
+        b_norm = choices[1].strip().strip('"\'').lower()
+
+        prompts = [self._messages_to_prompt(m) for m in messages_list]
+        sp = SamplingParams(temperature=1.0, max_tokens=1, logprobs=logprobs)
+        outputs = self.llm.generate(prompts, sp)
+
+        results: List[Optional[float]] = []
+        for out in outputs:
+            try:
+                first_step = out.outputs[0].logprobs[0]
+            except (IndexError, AttributeError, TypeError):
+                results.append(None)
+                continue
+            a_mass = 0.0
+            b_mass = 0.0
+            for _tid, lp in first_step.items():
+                tok = getattr(lp, 'decoded_token', None)
+                if tok is None:
+                    continue
+                norm = tok.strip().strip('"\'').lower()
+                if norm == a_norm:
+                    a_mass += math.exp(lp.logprob)
+                elif norm == b_norm:
+                    b_mass += math.exp(lp.logprob)
+            denom = a_mass + b_mass
+            results.append(a_mass / denom if denom > 0 else None)
+        return results
 
     async def _completions_stream(self, messages: List[Dict]):
         prompt = self._messages_to_prompt(messages)
@@ -1078,4 +1149,99 @@ class LiteLLMAgent:
             print(f"Number of timeouts: {counts['timeouts']}")
             print(f"Number of generic errors: {counts['errors']}")
 
+        return [results[i] for i in range(len(messages))]
+
+    async def async_choice_probs(
+        self,
+        messages: List[List[Dict]],
+        choices: List[str] = ['A', 'B'],
+        verbose: bool = True,
+    ) -> List[Optional[float]]:
+        """
+        Forced-choice via a single logprobs call per message (HTTP/OpenAI-
+        compatible path). Mirrors ``async_completions``'s concurrency and
+        retry structure but requests ``max_tokens=1, temperature=1.0,
+        logprobs=True, top_logprobs=20`` (top_logprobs is capped at 20 by the
+        OpenAI spec). Returns P(choices[0]) per message, or ``None`` when
+        neither choice appears in the returned top-logprobs.
+
+        For local models where you control the inference server, prefer
+        ``vLLMAgent.choice_probs`` -- it is faster (no HTTP overhead, single
+        batched forward pass) and supports a much larger top-k.
+        """
+        import math
+        assert len(choices) == 2, "choices must be a list of two options"
+        a_norm = choices[0].strip().strip('"\'').lower()
+        b_norm = choices[1].strip().strip('"\'').lower()
+
+        def _compute_p_a(completion_res) -> Optional[float]:
+            try:
+                choice0 = completion_res.choices[0]
+                lp = getattr(choice0, 'logprobs', None) or (
+                    choice0.get('logprobs') if isinstance(choice0, dict) else None
+                )
+                content = getattr(lp, 'content', None) if lp is not None else None
+                if content is None and isinstance(lp, dict):
+                    content = lp.get('content')
+                first = content[0] if content else None
+                top = getattr(first, 'top_logprobs', None) if first is not None else None
+                if top is None and isinstance(first, dict):
+                    top = first.get('top_logprobs')
+            except (AttributeError, IndexError, TypeError):
+                return None
+            if not top:
+                return None
+            a_mass = 0.0
+            b_mass = 0.0
+            for entry in top:
+                if isinstance(entry, dict):
+                    tok = entry.get('token'); lgp = entry.get('logprob')
+                else:
+                    tok = getattr(entry, 'token', None); lgp = getattr(entry, 'logprob', None)
+                if tok is None or lgp is None:
+                    continue
+                norm = tok.strip().strip('"\'').lower()
+                if norm == a_norm:
+                    a_mass += math.exp(lgp)
+                elif norm == b_norm:
+                    b_mass += math.exp(lgp)
+            denom = a_mass + b_mass
+            return a_mass / denom if denom > 0 else None
+
+        semaphore = asyncio.Semaphore(self.concurrency_limit)
+        results: Dict[int, Optional[float]] = {}
+
+        async def process_message(idx: int):
+            current_timeout = self.base_timeout
+            retry_delay = self.base_delay
+            for attempt in range(self.max_retries):
+                async with semaphore:
+                    try:
+                        completion_res = await litellm_acompletion(
+                            model=self.model,
+                            messages=messages[idx],
+                            max_tokens=1,
+                            temperature=1.0,
+                            logprobs=True,
+                            top_logprobs=20,
+                            timeout=current_timeout,
+                        )
+                        results[idx] = _compute_p_a(completion_res)
+                        return
+                    except asyncio.TimeoutError:
+                        current_timeout = min(current_timeout * 2.0, 60.0)
+                    except Exception as exc:
+                        if verbose:
+                            print(
+                                f"[Error] async_choice_probs attempt "
+                                f"{attempt+1}/{self.max_retries} msg {idx}: {exc}"
+                            )
+                        await asyncio.sleep(min(retry_delay, self.max_delay))
+                        retry_delay *= 2
+            results[idx] = None
+
+        tasks = [process_message(i) for i in range(len(messages))]
+        for coro in tqdm_asyncio.as_completed(tasks, total=len(tasks),
+                                              desc="logprob calls"):
+            await coro
         return [results[i] for i in range(len(messages))]

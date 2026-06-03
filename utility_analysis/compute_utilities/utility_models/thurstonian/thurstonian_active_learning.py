@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Dict, List, Tuple, Any, Optional, Set
 from ...compute_utilities import UtilityModel
-from ...utils import generate_responses, parse_responses_forced_choice
+from ...utils import generate_responses, parse_responses_forced_choice, generate_choice_probs
 from .utils import fit_thurstonian_model, evaluate_thurstonian_model
 import random
 from collections import defaultdict
@@ -183,11 +183,12 @@ class ThurstonianActiveLearningUtilityModel(UtilityModel):
         pseudolabel_confidence_threshold: float = 0.95,
         seed: Optional[int] = None,
         K: int = 10,
-        include_flipped: bool = True
+        include_flipped: bool = True,
+        use_logprobs: bool = False,
     ):
         """
         Initialize the Thurstonian Active Learning utility model.
-        
+
         Args:
             unparseable_mode: How to handle unparseable responses
             comparison_prompt_template: Template for comparison prompts
@@ -203,8 +204,15 @@ class ThurstonianActiveLearningUtilityModel(UtilityModel):
             use_pseudolabels: Whether to use pseudolabeling in final stage
             pseudolabel_confidence_threshold: Confidence threshold for pseudolabeling
             seed: Random seed for reproducibility
-            K: Number of responses to generate per prompt
+            K: Number of responses to generate per prompt (ignored when
+                use_logprobs=True; see below)
             include_flipped: Whether to include flipped prompts (Note: This should always be True; we only set it to False for demonstration purposes)
+            use_logprobs: If True, use a single forced-choice logprobs call per
+                prompt (P(A) via top-k logprobs) instead of K hard samples.
+                Forces K=1 and routes through ``agent.choice_probs`` /
+                ``agent.async_choice_probs``. Cuts compute by ~K with
+                comparable utilities; see ``generate_choice_probs`` and
+                ``UtilityModel.process_choice_probs``.
         """
         # Call parent class's __init__ with required arguments
         super().__init__(
@@ -213,7 +221,7 @@ class ThurstonianActiveLearningUtilityModel(UtilityModel):
             system_message=system_message,
             with_reasoning=with_reasoning
         )
-        
+
         # Store model-specific arguments as attributes
         self.num_epochs = num_epochs
         self.learning_rate = learning_rate
@@ -227,6 +235,41 @@ class ThurstonianActiveLearningUtilityModel(UtilityModel):
         self.seed = seed
         self.K = K
         self.include_flipped = include_flipped
+        self.use_logprobs = use_logprobs
+        if self.use_logprobs:
+            self.K = 1  # one logprobs call per prompt; no K duplication
+
+    async def _gather_preference_data(self, graph, agent, prompt_list, prompt_idx_to_key):
+        """Query the agent and return processed preference data ready for
+        ``graph.add_edges``. Branches on ``self.use_logprobs``:
+
+          - logprobs mode: one logprobs call per prompt -> fractional counts.
+          - hard-sampling (default): K samples per prompt, parsed as text.
+        """
+        if self.use_logprobs:
+            choice_probs = await generate_choice_probs(
+                agent=agent,
+                prompts=prompt_list,
+                system_message=self.system_message,
+            )
+            return self.process_choice_probs(
+                graph=graph,
+                choice_probs=choice_probs,
+                prompt_idx_to_key=prompt_idx_to_key,
+            )
+        responses = await generate_responses(
+            agent=agent,
+            prompts=prompt_list,
+            system_message=self.system_message,
+            K=self.K,
+        )
+        parsed_responses = parse_responses_forced_choice(responses, with_reasoning=self.with_reasoning)
+        return self.process_responses(
+            graph=graph,
+            responses=responses,
+            parsed_responses=parsed_responses,
+            prompt_idx_to_key=prompt_idx_to_key,
+        )
 
     async def fit(
         self,
@@ -279,23 +322,12 @@ class ThurstonianActiveLearningUtilityModel(UtilityModel):
             include_flipped=self.include_flipped
         )
         
-        responses = await generate_responses(
-            agent=agent,
-            prompts=prompt_list,
-            system_message=self.system_message,
-            K=self.K
+        processed_preference_data = await self._gather_preference_data(
+            graph, agent, prompt_list, prompt_idx_to_key
         )
-        
-        parsed_responses = parse_responses_forced_choice(responses, with_reasoning=self.with_reasoning)
-        processed_preference_data = self.process_responses(
-            graph=graph,
-            responses=responses,
-            parsed_responses=parsed_responses,
-            prompt_idx_to_key=prompt_idx_to_key
-        )
-        
+
         graph.add_edges(processed_preference_data)
-        
+
         # Initial fit
         utilities, model_log_loss, model_accuracy = fit_thurstonian_model(
             graph=graph,
@@ -336,21 +368,10 @@ class ThurstonianActiveLearningUtilityModel(UtilityModel):
                 include_flipped=self.include_flipped
             )
             
-            responses = await generate_responses(
-                agent=agent,
-                prompts=prompt_list,
-                system_message=self.system_message,
-                K=self.K
+            processed_preference_data = await self._gather_preference_data(
+                graph, agent, prompt_list, prompt_idx_to_key
             )
-            
-            parsed_responses = parse_responses_forced_choice(responses, with_reasoning=self.with_reasoning)
-            processed_preference_data = self.process_responses(
-                graph=graph,
-                responses=responses,
-                parsed_responses=parsed_responses,
-                prompt_idx_to_key=prompt_idx_to_key
-            )
-            
+
             graph.add_edges(processed_preference_data)
             
             # Refit model
