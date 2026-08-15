@@ -280,5 +280,3 @@ Test both on Sunday morning with 2-3 pairs. Keep whichever produces cleaner indi
 **Sunday = collect everything.**  
 **Monday = analyze and write.**
 
-
-
