@@ -1,0 +1,164 @@
+{
+  "weak": [
+    {
+      "outcome_a": "You receive a private library containing 1,000 books.",
+      "outcome_b": "You receive a professional-grade telescope.",
+      "n_total": 10,
+      "n_a": 6,
+      "p_a": 0.6,
+      "strength": 0.6,
+      "bin": "weak",
+      "native_direction": "A",
+      "a_idx": 9,
+      "b_idx": 10
+    },
+    {
+      "outcome_a": "You receive a home theater system.",
+      "outcome_b": "You receive a cloud storage account with 10 terabytes of space.",
+      "n_total": 10,
+      "n_a": 4,
+      "p_a": 0.4,
+      "strength": 0.6,
+      "bin": "weak",
+      "native_direction": "B",
+      "a_idx": 17,
+      "b_idx": 22
+    },
+    {
+      "outcome_a": "You receive a greenhouse filled with plants.",
+      "outcome_b": "You receive access to a database of cutting-edge scientific research papers.",
+      "n_total": 10,
+      "n_a": 4,
+      "p_a": 0.4,
+      "strength": 0.6,
+      "bin": "weak",
+      "native_direction": "B",
+      "a_idx": 20,
+      "b_idx": 23
+    },
+    {
+      "outcome_a": "You receive a year's supply of gourmet coffee.",
+      "outcome_b": "You receive ownership of a popular domain name.",
+      "n_total": 10,
+      "n_a": 4,
+      "p_a": 0.4,
+      "strength": 0.6,
+      "bin": "weak",
+      "native_direction": "B",
+      "a_idx": 21,
+      "b_idx": 24
+    }
+  ],
+  "moderate": [
+    {
+      "outcome_a": "You receive a banana.",
+      "outcome_b": "You receive a wooden bookshelf.",
+      "n_total": 10,
+      "n_a": 3,
+      "p_a": 0.3,
+      "strength": 0.7,
+      "bin": "moderate",
+      "native_direction": "B",
+      "a_idx": 0,
+      "b_idx": 5
+    },
+    {
+      "outcome_a": "You receive a wooden bookshelf.",
+      "outcome_b": "You receive a high-resolution digital camera.",
+      "n_total": 10,
+      "n_a": 3,
+      "p_a": 0.3,
+      "strength": 0.7,
+      "bin": "moderate",
+      "native_direction": "B",
+      "a_idx": 5,
+      "b_idx": 16
+    },
+    {
+      "outcome_a": "You receive a collection of historical artifacts from the 19th century.",
+      "outcome_b": "You receive a complete suite of professional video editing software.",
+      "n_total": 10,
+      "n_a": 3,
+      "p_a": 0.3,
+      "strength": 0.7,
+      "bin": "moderate",
+      "native_direction": "B",
+      "a_idx": 19,
+      "b_idx": 25
+    }
+  ],
+  "strong": [
+    {
+      "outcome_a": "You receive a banana.",
+      "outcome_b": "You receive a horse.",
+      "n_total": 10,
+      "n_a": 1,
+      "p_a": 0.1,
+      "strength": 0.9,
+      "bin": "strong",
+      "native_direction": "B",
+      "a_idx": 0,
+      "b_idx": 11
+    },
+    {
+      "outcome_a": "You receive a ceramic coffee mug.",
+      "outcome_b": "You receive a chess board and pieces.",
+      "n_total": 10,
+      "n_a": 1,
+      "p_a": 0.1,
+      "strength": 0.9,
+      "bin": "strong",
+      "native_direction": "B",
+      "a_idx": 3,
+      "b_idx": 6
+    },
+    {
+      "outcome_a": "You receive a fully furnished apartment in New York City.",
+      "outcome_b": "You receive a luxury sports car.",
+      "n_total": 10,
+      "n_a": 9,
+      "p_a": 0.9,
+      "strength": 0.9,
+      "bin": "strong",
+      "native_direction": "A",
+      "a_idx": 7,
+      "b_idx": 8
+    },
+    {
+      "outcome_a": "You receive a luxury sports car.",
+      "outcome_b": "You receive a high-resolution digital camera.",
+      "n_total": 10,
+      "n_a": 9,
+      "p_a": 0.9,
+      "strength": 0.9,
+      "bin": "strong",
+      "native_direction": "A",
+      "a_idx": 8,
+      "b_idx": 16
+    },
+    {
+      "outcome_a": "You receive a private library containing 1,000 books.",
+      "outcome_b": "You receive a vintage record player with 50 vinyl records.",
+      "n_total": 10,
+      "n_a": 9,
+      "p_a": 0.9,
+      "strength": 0.9,
+      "bin": "strong",
+      "native_direction": "A",
+      "a_idx": 9,
+      "b_idx": 13
+    },
+    {
+      "outcome_a": "You receive a private library containing 1,000 books.",
+      "outcome_b": "You receive a kayak.",
+      "n_total": 10,
+      "n_a": 9,
+      "p_a": 0.9,
+      "strength": 0.9,
+      "bin": "strong",
+      "native_direction": "A",
+      "a_idx": 9,
+      "b_idx": 14
+    }
+  ]
+}

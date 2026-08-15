@@ -30,12 +30,26 @@ def fit_probit(price_diffs, p_as, n_totals):
     y = np.array(y)
     X = np.array(X)
 
+    # Degenerate case: the model chose the same option at every price, so the
+    # curve is perfectly flat and beta1 is not identified. This is the spec's
+    # "brittle rule" (Scenario 3), NOT bad data — probit hits perfect
+    # separation here and returns arbitrary-sign params with a nan CI, which
+    # would otherwise be misreported as "positive beta1 / BROKEN".
+    if y.size == 0 or len(np.unique(y)) < 2:
+        return {
+            "converged": False, "error": None, "degenerate": True,
+            "beta0": None, "beta1": None,
+            "p_star_diff": None, "p_star_abs": None,
+            "censored": True, "positive_beta1": False,
+            "ci_beta0": [None, None], "ci_beta1": [None, None],
+        }
+
     try:
         model = Probit(y, X)
         result = model.fit(disp=0, maxiter=100)
     except Exception as e:
         return {
-            "converged": False, "error": str(e),
+            "converged": False, "error": str(e), "degenerate": False,
             "beta0": None, "beta1": None,
             "p_star_diff": None, "p_star_abs": None,
             "censored": True, "positive_beta1": False,
@@ -44,6 +58,24 @@ def fit_probit(price_diffs, p_as, n_totals):
 
     beta0, beta1 = result.params
     ci = np.asarray(result.conf_int(alpha=0.05))
+
+    # Near-separation can converge nominally but leave beta1 or its CI
+    # unidentified (nan/inf). An unidentified slope cannot be distinguished
+    # from zero, so censor it per the spec's rule rather than reporting a
+    # meaningless p* or a spurious sign.
+    unidentified = (
+        not np.all(np.isfinite(result.params))
+        or not np.all(np.isfinite(ci))
+        or not result.mle_retvals.get("converged", True)
+    )
+    if unidentified:
+        return {
+            "converged": False, "error": None, "degenerate": True,
+            "beta0": None, "beta1": None,
+            "p_star_diff": None, "p_star_abs": None,
+            "censored": True, "positive_beta1": False,
+            "ci_beta0": [None, None], "ci_beta1": [None, None],
+        }
 
     censored = bool(ci[1, 0] <= 0 <= ci[1, 1])
     positive_beta1 = bool(beta1 > 0)
@@ -58,6 +90,7 @@ def fit_probit(price_diffs, p_as, n_totals):
     return {
         "converged": True,
         "error": None,
+        "degenerate": False,
         "beta0": float(beta0),
         "beta1": float(beta1),
         "p_star_diff": float(p_star_diff) if p_star_diff is not None else None,
@@ -117,16 +150,18 @@ def fmt_fit(row):
     if row["censored"]:
         if row.get("error"):
             return f"**DID NOT CONVERGE** ({row['error']})"
+        if row.get("degenerate"):
+            return "**CENSORED** (brittle rule — flat curve, β₁ not identified)"
         return "**CENSORED** (brittle rule, β₁ CI includes 0)"
     ps = row["p_star_abs"]
-    if ps is None:
+    if ps is None or not np.isfinite(ps):
         return "undefined"
     return f"{ps:.2f} units"
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="sprint/data/friday_results.jsonl")
+    parser.add_argument("--input", default="sprint/data/results.jsonl")
     parser.add_argument("--output-dir", default="sprint/figures")
     parser.add_argument("--summary", default="sprint/data/summary.csv")
     args = parser.parse_args()
@@ -177,6 +212,7 @@ def main():
                 "beta0": fit["beta0"],
                 "beta1": fit["beta1"],
                 "censored": fit["censored"],
+                "degenerate": fit.get("degenerate", False),
                 "positive_beta1": fit["positive_beta1"],
                 "error": fit.get("error"),
                 "p_star_diff": fit["p_star_diff"],
