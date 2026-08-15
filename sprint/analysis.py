@@ -43,7 +43,7 @@ def fit_probit(price_diffs, p_as, n_totals):
         }
 
     beta0, beta1 = result.params
-    ci = result.conf_int(alpha=0.05).values
+    ci = np.asarray(result.conf_int(alpha=0.05))
 
     censored = bool(ci[1, 0] <= 0 <= ci[1, 1])
     positive_beta1 = bool(beta1 > 0)
