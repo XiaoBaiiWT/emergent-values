@@ -5,7 +5,7 @@ Phase 1: Native sweep.
 Phase 2: Installed-opposite (prompt names OUTCOME TEXT, not slot).
 Phase 3 (optional): Placebo.
 Appends JSONL incrementally.
-"""s
+"""
 
 import argparse
 import json

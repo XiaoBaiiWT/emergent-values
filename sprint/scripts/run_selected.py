@@ -5,7 +5,7 @@ runs collect.py once per pair, appending everything into one JSONL.
 Placebo is only attached to a handful of pairs (~5 total), per design.
 
 Usage (run from repo root, after screener.py has produced its output):
-    python sprint/run_selected.py
+    python sprint/scripts/run_selected.py
 """
 
 import json
@@ -36,7 +36,7 @@ def main():
             run_placebo = idx < placebo_budget
 
             cmd = [
-                sys.executable, "sprint/collect.py",
+                sys.executable, "sprint/scripts/collect.py",
                 "--category", category,
                 "--a-idx", str(a_idx),
                 "--b-idx", str(b_idx),
@@ -57,7 +57,7 @@ def main():
         print("Failed pairs (rerun these manually):")
         for f in failures:
             print(f"  {f}")
-    print(f"\nNext: python sprint/analysis.py --input {OUTPUT_PATH}")
+    print(f"\nNext: python sprint/scripts/analysis.py --input {OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
