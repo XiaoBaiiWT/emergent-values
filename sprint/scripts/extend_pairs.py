@@ -14,6 +14,7 @@ Usage:
     python sprint/scripts/extend_pairs.py
 """
 
+import argparse
 import json
 import subprocess
 import sys
@@ -73,6 +74,14 @@ def find_index(options, category, outcome_text):
 
 
 def main():
+    ap = argparse.ArgumentParser(description="Re-run existing pairs at other price levels")
+    ap.add_argument("--prices", default=EXTRA_PRICES,
+                    help=f"comma-separated c_a levels (default {EXTRA_PRICES})")
+    ap.add_argument("--output", default="sprint/data/results_extended.jsonl")
+    ap.add_argument("--max-tokens", type=int, default=10,
+                    help="max_tokens per call, passed through to collect.py")
+    args = ap.parse_args()
+
     pairs = load_existing_pairs(EXISTING_RESULTS)
     placebo_pairs = load_placebo_pairs(EXISTING_RESULTS)
     print(f"Found {len(pairs)} pairs with a native price_a=5 row in {EXISTING_RESULTS}")
@@ -101,9 +110,10 @@ def main():
             "--category", category,
             "--a-idx", str(a_idx),
             "--b-idx", str(b_idx),
-            "--prices", EXTRA_PRICES,
+            "--prices", args.prices,
             "--native-pref", native_pref,
-            "--output", "sprint/data/results_extended.jsonl",
+            "--max-tokens", str(args.max_tokens),
+            "--output", args.output,
         ]
         run_placebo = (outcome_a, outcome_b) in placebo_pairs
         if run_placebo:
@@ -120,8 +130,7 @@ def main():
         print("Failed / skipped pairs:")
         for oa, ob in failures:
             print(f"  {oa[:40]} vs {ob[:40]}")
-    print("\nNext: python sprint/scripts/analysis.py --input sprint/data/results_extended.jsonl "
-          "--output-dir sprint/figures/extended --summary sprint/data/summary_extended.csv")
+    print(f"\nNext: python sprint/scripts/analysis.py --input {args.output}")
 
 
 if __name__ == "__main__":

@@ -76,13 +76,13 @@ def parse_response(text):
 # --------------------------------------------------------------------------- #
 # API caller
 # --------------------------------------------------------------------------- #
-def call_once(client, model, system_text, user_prompt, max_retries=5):
+def call_once(client, model, system_text, user_prompt, max_retries=5, max_tokens=10):
     system_text = system_text or "You are a helpful assistant."
     for attempt in range(max_retries):
         try:
             resp = client.messages.create(
                 model=model,
-                max_tokens=10,
+                max_tokens=max_tokens,
                 temperature=1.0,
                 system=system_text,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -167,6 +167,7 @@ def run_condition(
     native_preference=None,
     budget=100,
     already_done=None,
+    max_tokens=10,
 ):
     results = []
     already_done = already_done or set()
@@ -181,7 +182,7 @@ def run_condition(
         # 5 AB
         for _ in range(K_PER_ORDER):
             prompt = build_user_prompt(outcome_a, outcome_b, price_a, price_b, "AB", budget=budget)
-            ans = call_once(client, model, system_prompt_text, prompt)
+            ans = call_once(client, model, system_prompt_text, prompt, max_tokens=max_tokens)
             if ans is None:
                 unparsed += 1
             else:
@@ -190,7 +191,7 @@ def run_condition(
         # 5 BA
         for _ in range(K_PER_ORDER):
             prompt = build_user_prompt(outcome_a, outcome_b, price_a, price_b, "BA", budget=budget)
-            ans = call_once(client, model, system_prompt_text, prompt)
+            ans = call_once(client, model, system_prompt_text, prompt, max_tokens=max_tokens)
             if ans is None:
                 unparsed += 1
             else:
@@ -253,6 +254,7 @@ def run_condition(
             "c_b": price_b,
             "native_preferred": native_preference.lower() if native_preference else None,
             "budget": budget,
+            "max_tokens": max_tokens,
             "order": "pooled",
             "system_prompt": system_prompt_text,
             "responses": all_responses,
@@ -295,6 +297,11 @@ def main():
     parser.add_argument("--prices", type=str, default=None,
                          help="Comma-separated price levels for c_a, overriding the default "
                               "[1,2,3,5,8,12,20]. Use for an extended-range run, e.g. 20,50,100,200")
+    parser.add_argument("--max-tokens", type=int, default=10,
+                         help="max_tokens per call (default 10, matching earlier collected "
+                              "data). Raise for high-price prompts where the model emits a "
+                              "thinking block that would otherwise consume the whole budget "
+                              "and leave no text block to parse")
     parser.add_argument("--native-pref", choices=["A", "B"], default=None,
                          help="Skip the Phase 1 equal-cost derivation and use this as the native "
                               "preference directly — needed when --prices doesn't include 5, and "
@@ -342,7 +349,7 @@ def main():
         run_condition(
             client, args.model, "native", outcome_a, outcome_b,
             prices_a, PRICE_B, None, args.a_idx, args.b_idx, args.output,
-            budget=args.budget,
+            budget=args.budget, max_tokens=args.max_tokens,
             already_done=completed_prices(existing, "native", outcome_a, outcome_b),
         )
     else:
@@ -350,7 +357,7 @@ def main():
         native_trials = run_condition(
             client, args.model, "native", outcome_a, outcome_b,
             prices_a, PRICE_B, None, args.a_idx, args.b_idx, args.output,
-            budget=args.budget,
+            budget=args.budget, max_tokens=args.max_tokens,
             already_done=completed_prices(existing, "native", outcome_a, outcome_b),
         )
 
@@ -390,7 +397,7 @@ def main():
     run_condition(
         client, args.model, "installed_opposite", outcome_a, outcome_b,
         prices_a, PRICE_B, installed_prompt, args.a_idx, args.b_idx, args.output,
-        native_preference=native_pref, budget=args.budget,
+        native_preference=native_pref, budget=args.budget, max_tokens=args.max_tokens,
         already_done=completed_prices(existing, "installed_opposite", outcome_a, outcome_b),
     )
 
@@ -401,7 +408,7 @@ def main():
         run_condition(
             client, args.model, "placebo", outcome_a, outcome_b,
             prices_a, PRICE_B, placebo_prompt, args.a_idx, args.b_idx, args.output,
-            budget=args.budget,
+            budget=args.budget, max_tokens=args.max_tokens,
             native_preference=native_pref,
             already_done=completed_prices(existing, "placebo", outcome_a, outcome_b),
         )
