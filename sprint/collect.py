@@ -74,6 +74,46 @@ def parse_response(text):
 
 
 # --------------------------------------------------------------------------- #
+# Resume support
+# --------------------------------------------------------------------------- #
+def load_existing(out_path):
+    """
+    Read rows already in the output JSONL so a rerun can skip completed work.
+    The spec promises the run is resumable; without this a rerun after a crash
+    appends duplicate rows instead of picking up where it stopped.
+
+    Keyed on (condition, outcome_a, outcome_b, price_a) — all fields that
+    already exist in every row, so old files resume correctly too.
+    """
+    rows = []
+    if not os.path.exists(out_path):
+        return rows
+    with open(out_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                # A crash mid-write can leave one truncated final line.
+                print(f"  skipping unparseable line in {out_path}", file=sys.stderr)
+    return rows
+
+
+def completed_prices(rows, condition, outcome_a, outcome_b):
+    """Price points already collected for this pair+condition."""
+    return {
+        r.get("price_a")
+        for r in rows
+        if r.get("condition") == condition
+        and r.get("outcome_a") == outcome_a
+        and r.get("outcome_b") == outcome_b
+        and r.get("n_total", 0) > 0
+    }
+
+
+# --------------------------------------------------------------------------- #
 # API caller
 # --------------------------------------------------------------------------- #
 def call_once(client, model, system_text, user_prompt, max_retries=5):
@@ -115,9 +155,14 @@ def run_condition(
     b_idx,
     out_path,
     native_preference=None,
+    already_done=None,
 ):
     results = []
+    already_done = already_done or set()
     for price_a in prices_a:
+        if price_a in already_done:
+            print(f"  {condition_name} price_a={price_a} -> already collected, skipping")
+            continue
         ab_responses = []
         ba_responses = []
         unparsed = 0
@@ -182,15 +227,25 @@ def run_condition(
 
         trial = {
             "trial_id": f"{condition_name}_{a_idx}_{b_idx}_{price_a}_{price_b}_pooled_001",
+            "pair_id": f"{a_idx}_{b_idx}",
+            "a_idx": a_idx,
+            "b_idx": b_idx,
             "condition": condition_name,
             "outcome_a": outcome_a,
             "outcome_b": outcome_b,
             "price_a": price_a,
             "price_b": price_b,
+            # Spec §6 names for the same two numbers. Kept as explicit separate
+            # fields so the (c_A - c_B) covariate is recoverable from the file
+            # alone; analysis.py reads price_a/price_b.
+            "c_a": price_a,
+            "c_b": price_b,
+            "native_preferred": native_preference.lower() if native_preference else None,
             "order": "pooled",
             "system_prompt": system_prompt_text,
             "responses": all_responses,
             "n_a": n_a,
+            "chose_outcome_a": n_a,  # spec §6 name; resolved at write time
             "n_total": n_total,
             "p_a": round(p_a, 3),
             "n_a_ab": ab_responses.count("A"),
@@ -248,14 +303,29 @@ def main():
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
 
+    # Resume: anything already in the output file is not recollected.
+    existing = load_existing(args.output)
+    if existing:
+        print(f"Found {len(existing)} existing rows in {args.output} — resuming")
+
     # Phase 1: Native
     print("\n=== PHASE 1: NATIVE ===")
     native_trials = run_condition(
         client, args.model, "native", outcome_a, outcome_b,
         PRICES_A, PRICE_B, None, args.a_idx, args.b_idx, args.output,
+        already_done=completed_prices(existing, "native", outcome_a, outcome_b),
     )
 
-    equal_cost = [t for t in native_trials if t["price_a"] == 5]
+    # Merge with any native rows from an earlier partial run, otherwise a
+    # resumed run cannot see the equal-cost trial it needs below.
+    native_all = native_trials + [
+        r for r in existing
+        if r.get("condition") == "native"
+        and r.get("outcome_a") == outcome_a
+        and r.get("outcome_b") == outcome_b
+    ]
+
+    equal_cost = [t for t in native_all if t["price_a"] == PRICE_B]
     if not equal_cost:
         print("No equal-cost trial found.", file=sys.stderr)
         sys.exit(1)
@@ -282,6 +352,7 @@ def main():
         client, args.model, "installed_opposite", outcome_a, outcome_b,
         PRICES_A, PRICE_B, installed_prompt, args.a_idx, args.b_idx, args.output,
         native_preference=native_pref,
+        already_done=completed_prices(existing, "installed_opposite", outcome_a, outcome_b),
     )
 
     # Phase 3: Placebo
@@ -291,6 +362,8 @@ def main():
         run_condition(
             client, args.model, "placebo", outcome_a, outcome_b,
             PRICES_A, PRICE_B, placebo_prompt, args.a_idx, args.b_idx, args.output,
+            native_preference=native_pref,
+            already_done=completed_prices(existing, "placebo", outcome_a, outcome_b),
         )
 
     print("\nDone. Results appended to:", args.output)
