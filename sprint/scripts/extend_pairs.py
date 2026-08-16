@@ -80,6 +80,10 @@ def main():
     ap.add_argument("--output", default="sprint/data/results_extended.jsonl")
     ap.add_argument("--max-tokens", type=int, default=10,
                     help="max_tokens per call, passed through to collect.py")
+    ap.add_argument("--budget", type=int, default=100,
+                    help="budget ceiling shown in the prompt, passed to collect.py")
+    ap.add_argument("--no-placebo", action="store_true",
+                    help="native and installed-opposite only, skipping the placebo arm")
     args = ap.parse_args()
 
     pairs = load_existing_pairs(EXISTING_RESULTS)
@@ -113,9 +117,10 @@ def main():
             "--prices", args.prices,
             "--native-pref", native_pref,
             "--max-tokens", str(args.max_tokens),
+            "--budget", str(args.budget),
             "--output", args.output,
         ]
-        run_placebo = (outcome_a, outcome_b) in placebo_pairs
+        run_placebo = (not args.no_placebo) and (outcome_a, outcome_b) in placebo_pairs
         if run_placebo:
             cmd.append("--placebo")
         tag = " (+placebo)" if run_placebo else ""
