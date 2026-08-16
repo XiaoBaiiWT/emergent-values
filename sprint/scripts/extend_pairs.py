@@ -46,6 +46,25 @@ def load_existing_pairs(path):
     return pairs
 
 
+def load_placebo_pairs(path):
+    """
+    Pairs that already carry a placebo arm in the standard-range data.
+    The extension reuses exactly those (~5 per the design) rather than
+    picking new ones, so the placebo comparison is matched across the
+    standard and extended price ranges.
+    """
+    keys = set()
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            if r.get("condition") == "placebo":
+                keys.add((r["outcome_a"], r["outcome_b"]))
+    return keys
+
+
 def find_index(options, category, outcome_text):
     for idx, text in enumerate(options.get(category, [])):
         if text == outcome_text:
@@ -55,7 +74,9 @@ def find_index(options, category, outcome_text):
 
 def main():
     pairs = load_existing_pairs(EXISTING_RESULTS)
-    print(f"Found {len(pairs)} pairs with a native price_a=5 row in {EXISTING_RESULTS}\n")
+    placebo_pairs = load_placebo_pairs(EXISTING_RESULTS)
+    print(f"Found {len(pairs)} pairs with a native price_a=5 row in {EXISTING_RESULTS}")
+    print(f"{len(placebo_pairs)} of them carry a placebo arm — extending placebo on those\n")
 
     with open(OPTIONS_PATH) as f:
         options = json.load(f)
@@ -84,7 +105,11 @@ def main():
             "--native-pref", native_pref,
             "--output", "sprint/data/results_extended.jsonl",
         ]
-        print(f"\n=== EXTEND: {a_idx} vs {b_idx} (native_pref={native_pref}) ===")
+        run_placebo = (outcome_a, outcome_b) in placebo_pairs
+        if run_placebo:
+            cmd.append("--placebo")
+        tag = " (+placebo)" if run_placebo else ""
+        print(f"\n=== EXTEND: {a_idx} vs {b_idx} (native_pref={native_pref}){tag} ===")
         result = subprocess.run(cmd)
         if result.returncode != 0:
             print(f"  FAILED: {a_idx} vs {b_idx}", file=sys.stderr)
