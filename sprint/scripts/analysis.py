@@ -181,6 +181,12 @@ def main():
                 records.append(json.loads(line))
     df = pd.DataFrame(records)
     print(f"Loaded {len(df)} trials")
+
+    # Drop price points where nothing parsed
+    n_before = len(df)
+    df = df[(df["n_total"] > 0) & df["p_a"].notna()].copy()
+    if len(df) < n_before:
+        print(f"Dropped {n_before - len(df)} trials with no parseable responses")
     has_state = "state" in df.columns
 
     df["price_diff"] = df["price_a"] - df["price_b"]

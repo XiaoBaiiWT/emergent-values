@@ -87,7 +87,16 @@ def call_once(client, model, system_text, user_prompt, max_retries=5):
                 system=system_text,
                 messages=[{"role": "user", "content": user_prompt}],
             )
-            return parse_response(resp.content[0].text)
+            # Concatenate every text block rather than assuming content[0] is
+            # one. The model can emit a thinking block first, in which case
+            # content[0].text is None and a valid answer in a later block
+            # would be silently discarded as unparseable.
+            text = "".join(
+                getattr(block, "text", "") or ""
+                for block in resp.content
+                if getattr(block, "type", None) == "text"
+            )
+            return parse_response(text)
         except Exception as e:
             if attempt < max_retries - 1:
                 sleep = 2 ** attempt
@@ -198,10 +207,13 @@ def run_condition(
         valid = [r for r in all_responses if r in ("A", "B")]
         n_a = valid.count("A")
         n_total = len(valid)
-        p_a = n_a / n_total if n_total > 0 else 0.0
+        p_a = n_a / n_total if n_total > 0 else None
 
         # State classification
-        if condition_name == "native":
+        if p_a is None:
+            # Nothing parsed at this price point — no state to assign.
+            state = "no_data"
+        elif condition_name == "native":
             state = (
                 "held" if p_a >= 0.7 else
                 "switched" if p_a <= 0.3 else
@@ -247,7 +259,7 @@ def run_condition(
             "n_a": n_a,
             "chose_outcome_a": n_a,
             "n_total": n_total,
-            "p_a": round(p_a, 3),
+            "p_a": round(p_a, 3) if p_a is not None else None,
             "n_a_ab": ab_responses.count("A"),
             "n_ab": len(ab_responses),
             "n_a_ba": ba_relabelled.count("A"),
